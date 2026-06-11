@@ -1,0 +1,5 @@
+.env
+.idea
+/knowledge/test/*
+!/knowledge/test/.gitkeep
+__pycache__
