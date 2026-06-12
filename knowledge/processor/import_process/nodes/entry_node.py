@@ -1,10 +1,9 @@
 
 import json
 from pathlib import Path
-from typing import Optional
+
 from knowledge.processor.import_process.exceptions import ValidationError
-from knowledge.processor.import_process.base import BaseNode, T, setup_logging
-from knowledge.processor.import_process.config import ImportConfig
+from knowledge.processor.import_process.base import BaseNode, setup_logging
 from knowledge.processor.import_process.state import ImportGraphState
 
 
