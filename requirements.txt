@@ -17,3 +17,4 @@ neo4j
 pymongo
 mineru[all]
 openai-agents
+grandalf
