@@ -63,10 +63,11 @@ class EntryNode(BaseNode):
 ################################
 if __name__ == '__main__':
     setup_logging()
-    pdf_path = r"F:\personal\skills\02_Linux\Linux.pdf"
+    # pdf_path = r"F:\personal\skills\02_Linux\Linux.pdf"
+    pdf_path = r"E:\python_project\shopkeeper\knowledge\test\input\万用表RS-12的使用.pdf"
     # 方式一：直接实例该节点对象，调用process方法
     test_entry_state = {
-        "file_dir":r"F:\personal\skills\02_Linux",
+        "file_dir":r"E:\python_project\shopkeeper\knowledge\test\input",
         "import_file_path":pdf_path
     }
     entry_node = EntryNode()

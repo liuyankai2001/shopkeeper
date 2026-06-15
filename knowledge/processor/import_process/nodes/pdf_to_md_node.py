@@ -134,8 +134,8 @@ class PdfToMdNode(BaseNode):
 if __name__ == '__main__':
     setup_logging()
     init_state = {
-        "import_file_path":r"C:\Users\28329\Desktop\test\专业实践学习报告.pdf",
-        "file_dir":r"C:\Users\28329\Desktop\test"
+        "import_file_path":r"E:\python_project\shopkeeper\knowledge\test\input\万用表RS-12的使用.pdf",
+        "file_dir":r"E:\python_project\shopkeeper\knowledge\test\output"
     }
     pdf_to_md_node = PdfToMdNode()
     res = pdf_to_md_node.process(init_state)
