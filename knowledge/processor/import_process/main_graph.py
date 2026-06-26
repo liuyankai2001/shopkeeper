@@ -1,14 +1,26 @@
 import json
 
+from langgraph.constants import END
 from langgraph.graph import StateGraph
+from langgraph.graph.state import CompiledStateGraph
 
 from knowledge.processor.import_process.base import setup_logging
 from knowledge.processor.import_process.nodes.entry_node import EntryNode
 from knowledge.processor.import_process.nodes.pdf_to_md_node import PdfToMdNode
+from knowledge.processor.import_process.nodes.md_img_node import MarkDownImageNode
+
 from knowledge.processor.import_process.state import  ImportGraphState
 from knowledge.processor.import_process.state import create_default_state
 
-def create_import_graph() -> StateGraph:
+
+def import_router(state:ImportGraphState):
+    if state.get("is_md_read_enabled"):
+        return "md_img_node"
+    if state.get("is_pdf_read_enabled"):
+        return "pdf_to_md_node"
+    return "__end__"
+
+def create_import_graph() -> CompiledStateGraph:
     """
     定义导入业务的graph状态拓扑图（langgraph构建流水线）整个流水线各个节点读取或写入的节点
     Returns:
@@ -19,15 +31,26 @@ def create_import_graph() -> StateGraph:
     graph_pipline.set_entry_point("entry_node")
     nodes = {
         "entry_node":EntryNode(),
-        "pdf_to_md_node":PdfToMdNode()
+        "pdf_to_md_node":PdfToMdNode(),
+        "md_img_node":MarkDownImageNode(),
     }
     for k,v in nodes.items():
         graph_pipline.add_node(k,v)
 
 
     # 3.定义边（顺序边、条件边）
+    # source:路由开始节点
+    # path:路由函数
+    # path_map:路由映射
+    graph_pipline.add_conditional_edges(
+        "entry_node",
+        import_router,
+        {"md_img_node":"md_img_node","pdf_to_md_node":"pdf_to_md_node","__end__":"__end__"}
+    )
+
     graph_pipline.add_edge("entry_node","pdf_to_md_node")
-    graph_pipline.add_edge("entry_node","__end__")
+    graph_pipline.add_edge("pdf_to_md_node","md_img_node")
+    graph_pipline.add_edge("md_img_node","__end__")
 
     # 4.编译
     return graph_pipline.compile()

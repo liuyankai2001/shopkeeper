@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 from typing import Tuple
 from knowledge.processor.import_process.exceptions import ValidationError, FileProcessingError, PdfConversionError

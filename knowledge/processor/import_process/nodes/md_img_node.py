@@ -6,6 +6,8 @@ from knowledge.processor.import_process.state import ImportGraphState
 from knowledge.processor.import_process.config import get_config
 from openai import OpenAI
 
+from knowledge.utils.minio_util import get_minio_client
+
 
 class MarkDownImageNode(BaseNode):
     """
@@ -30,17 +32,25 @@ class MarkDownImageNode(BaseNode):
             self.logger.warning(f"文件{md_path_obj.name}中暂无图片要处理")
             state['md_content'] = md_content
             return state
-        # 2.扫描并处理图片
+        # 2.扫描并处理图片 [("xxxx.jpg","xxx/xxx/xxx.jpg",("图片最近的上面一个标题","图片的上文","图片的下文")),...]
         target_images_context = self._scan_images_and_context(image_dir, md_content, config)
         # 3.用VLM为图片生成摘要（图片描述）
         images_summaries = self._extract_img_summary(md_path_obj.stem, target_images_context, config)
         # 4.将图片上传minio（图片在minio上的地址）
+        # 4.1 本地图片上传minio -》 remote url（图片远程地址）
+        # 4.2 替换md中的图片的本地url 以及vlm生成的摘要
+        new_md_contens = self._upload_img_and_update_md(md_path_obj.stem, md_content, images_summaries,
+                                                        target_images_context, config)
 
-        # 5.会写（将图片描述和图片地址）写到md_content中
+        # 5.更新state
+        state["md_content"] = new_md_contens
 
-        # 6.返回state
+
+        # 6.返回更新后的状态
+
+
         return {
-            "res":images_summaries
+            "res": images_summaries
         }
 
     def _get_img_md_content(self, state: ImportGraphState) -> tuple[str, Path, Path]:
@@ -233,14 +243,14 @@ class MarkDownImageNode(BaseNode):
         return "\n\n".join(selected)
 
     def _extract_img_summary(self, document_title: str, target_images_context: list[
-        tuple[str, str, tuple[str, str, str]]], config):
+        tuple[str, str, tuple[str, str, str]]], config) -> dict[str,str]:
         """
         为所有图片生成摘要（VLM）
         Args:
             document_title:文档名字
             target_images_context:所有图片信息
             config:配置信息
-        Returns:
+        Returns:dict[图片名称,图片摘要]
         """
         self.log_step("Step3", "提取图片摘要")
         summaries = {}
@@ -314,7 +324,52 @@ class MarkDownImageNode(BaseNode):
         summary = response.choices[0].message.content.strip()
         return summary
 
+    def _upload_img_and_update_md(self, document_name, md_content, images_summaries, target_images_context, config):
+        """
+        上传图片到minio，以及替换md中的图片url和摘要
+        Args:
+            md_content:
+            images_summaries:
+            target_images_context:
 
+        Returns:
+
+        """
+        remote_urls = {}
+        # 1.构建minio客户端
+        minio_client = get_minio_client()
+        if not minio_client:
+            self.logger.warning(f"无法将本地的图片上传至minio中")
+        # 2.遍历图片源信息
+        for img_name, img_path, _ in target_images_context:
+            object_name = f"{document_name}/{img_name}"
+            try:
+                minio_client.fput_object(
+                    config.minio_bucket,
+                    object_name,
+                    img_path
+                )
+                self.logger.info(f"图片：{img_name} 上传minio成功！")
+                # 手动拼接地址
+                # http://192.168.88.130:9000/test/1.png
+                remote_url = config.get_minio_base_url() + "/" + config.minio_bucket + "/" + object_name
+                remote_url[img_name] = remote_url
+            except Exception as e:
+                self.logger.error(f"图片：{img_name} 上传minio失败！")
+                remote_urls[img_name] = f"http://minio_mock/" + document_name + "/" + img_name
+        self.logger.info(f"成功上传{len(remote_urls)}个图片到minio")
+
+        # 3.替换（摘要和图片地址）到md内容中去
+        new_md_content = md_content
+        for img_name,img_summary in images_summaries.items():
+            # 3.1 提取远程地址
+            remote_url = remote_urls.get(img_name)
+            if not remote_url:
+                continue
+            # 3.2 替换url和摘要
+            replace_pattern = re.compile(r"!\[.*?\]\(.*?" + re.escape(img_name) + r".*?\)",re.IGNORECASE)
+            new_md_content = replace_pattern.sub(f"![{img_summary}]({remote_url})",new_md_content)
+        return new_md_content
 ##
 if __name__ == '__main__':
     setup_logging()
