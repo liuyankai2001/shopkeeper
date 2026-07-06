@@ -1,13 +1,15 @@
-
 import json
 import re
+from email.quoprimime import body_length
 from pathlib import Path
+from typing import Any
 
 from knowledge.processor.import_process.exceptions import ValidationError
 from knowledge.processor.import_process.base import BaseNode, setup_logging, T
 from knowledge.processor.import_process.state import ImportGraphState
 from knowledge.processor.import_process.config import get_config
 
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 
 class DocumentSplitNode(BaseNode):
@@ -15,14 +17,15 @@ class DocumentSplitNode(BaseNode):
 
     def process(self, state: ImportGraphState) -> T:
         # 1.获取参数
-        md_content,file_title,max_content_length, min_content_length = self._get_inputs(state)
+        md_content, file_title, max_content_length, min_content_length = self._get_inputs(state)
 
         # 2.根据标题切割
-        sections,has_title = self._split_by_headings(md_content,file_title)
-        return {"sections":sections,"has_title":has_title}
-        # 2.处理
-        # 2.1 如果section过长 继续进行二次切割
-        # 2.2 section内容过短，看能不能合并，如果能合，就合并。如果不能合并，就不合并
+        sections, has_title = self._split_by_headings(md_content, file_title)
+        # return {"sections":sections,"has_title":has_title}
+        # 3.处理(切分和合并)
+        # 3.1 如果section过长 继续进行二次切割
+        final_chunks = self.split_and_merge(sections, max_content_length, min_content_length)
+        # 3.2 section内容过短，看能不能合并，如果能合，就合并。如果不能合并，就不合并
 
         # 3. 组装
 
@@ -30,26 +33,26 @@ class DocumentSplitNode(BaseNode):
 
         pass
 
-    def _get_inputs(self, state:ImportGraphState):
-        self.log_step("step1","切分文档的参数校验以及获取")
+    def _get_inputs(self, state: ImportGraphState):
+        self.log_step("step1", "切分文档的参数校验以及获取")
         config = get_config()
         # 1.获取md_content
         md_content = state.get("md_content")
 
         # 2.统一换行符
         if md_content:
-            md_content = md_content.replace("\r\n","\n").replace("\r","\n")
+            md_content = md_content.replace("\r\n", "\n").replace("\r", "\n")
 
         # 3.获取文件标题
         file_title = state.get("file_title")
 
         # 4.校验最大最小值
-        if config.max_content_length <= 0 or config.min_content_length <=0 or config.max_content_length <= config.min_content_length:
+        if config.max_content_length <= 0 or config.min_content_length <= 0 or config.max_content_length <= config.min_content_length:
             raise ValidationError(f"切片长度参数校验失败")
 
-        return md_content,file_title,config.max_content_length,config.min_content_length
+        return md_content, file_title, config.max_content_length, config.min_content_length
 
-    def _split_by_headings(self, md_content:str, file_title:str) -> tuple[list[dict],bool]:
+    def _split_by_headings(self, md_content: str, file_title: str) -> tuple[list[dict], bool]:
         """
         根据md的标题（1-6）进行切分
         Args:
@@ -73,7 +76,7 @@ class DocumentSplitNode(BaseNode):
         body_lines = []
         current_level = 0
         current_title = ""
-        hierarchy = [""]*7 # 0号索引不用
+        hierarchy = [""] * 7  # 0号索引不用
 
         # 2.定义正则表达式(group1:标题的语法符号#【最少1个#，最多6个】)
         heading_re = re.compile(r"^\s*(#{1,6})\s+(.+)")
@@ -90,17 +93,17 @@ class DocumentSplitNode(BaseNode):
             parent_title = ""
             body = "\n".join(body_lines)
             if current_title or body:
-                for i in range(current_level-1,0,-1):
+                for i in range(current_level - 1, 0, -1):
                     if hierarchy[i]:
                         parent_title = hierarchy[i]
                         break
                 if not parent_title:
                     parent_title = current_title if current_title else file_title
                 return sections.append({
-                    "title":current_title if current_title else file_title, # 一定要存在
-                    "body":body,
-                    "file_title":file_title,
-                    "parent_title":parent_title  # 一定要存在
+                    "title": current_title if current_title else file_title,  # 一定要存在
+                    "body": body,
+                    "file_title": file_title,
+                    "parent_title": parent_title  # 一定要存在
                 })
 
         for content_line in content_lines:
@@ -112,28 +115,148 @@ class DocumentSplitNode(BaseNode):
                 has_title = True
                 # 当前行是标题
                 _flush()
-                level = len(match.group(1)) # 当前标题的级别
-                current_level = level # 当前标题的级别，_flush使用
+                level = len(match.group(1))  # 当前标题的级别
+                current_level = level  # 当前标题的级别，_flush使用
                 current_title = content_line
-                hierarchy[level] = current_title   # 当前标题的名字
+                hierarchy[level] = current_title  # 当前标题的名字
                 # 存储当前遍历的标题
                 body_lines = []
-                for i in range(level+1,7):
+                for i in range(level + 1, 7):
                     hierarchy[i] = ""
             else:
                 # 除了标题行，全都搜集起来
                 body_lines.append(content_line)
         _flush()
-        return sections,has_title
+        return sections, has_title
+
+    def split_and_merge(self, sections: list[dict[str, Any]], max_content_length: int, min_content_length: int):
+        """
+
+        Args:
+            sections: 根据标题切分后的所有section
+            max_content_length:每一个section的内容【title+body】长度最多不能超过指定：将标题注入内容中（标题注入：明确定位这一块的归属）
+            min_content_length:每一个section的内容，长度如果比min_content_length小，就尝试进行合并（合并：同源）
+
+        Returns:
+            list[section]
+        """
+        self.log_step("step2", "切分长内容及合并短内容")
+        # 1.切分
+        current_sections = []
+        for section in sections:
+            current_sections.extend(self.split_long_section(section, max_content_length))
+
+        # 2.合并
+        final_sections = self.merge_sort_section(current_sections, min_content_length)
+
+        # 3.返回
+        return final_sections
+
+    def split_long_section(self, section: dict[str, Any], max_content_length: int):
+        self.log_step("step3", "切分长内容")
+
+        # 1.获取section对象属性
+        title = section.get("title")  # 不可能为空
+        body = section.get("body")  # 可能为空
+        file_title = section.get("file_title")  # 不可能为空
+        parent_title = section.get("parent_title")  # 不可能为空
+
+        # 2.对标题做一个校验
+        TITLE_MAX_LENGTH = 50
+        if len(title) > TITLE_MAX_LENGTH:
+            self.logger.warning(f"标题长度超过限制，已截断：{title}")
+            title = title[:TITLE_MAX_LENGTH]
+
+        # 3.拼接title前缀
+        title_prefix = f"{title}\n\n"
+
+        # 4.计算总长度{len(title_prefix)+len(body)}
+        total_length = len(title_prefix) + len(body)
+
+        # 5.判断
+        if total_length <= max_content_length:
+            return [section]
+
+        # 6.计算body可用长度
+        body_length = max_content_length - len(title_prefix)
+        if body_length <= 0:
+            return [section]
+        # 7.切分：
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=body_length,
+                                                       chunk_overlap=0,
+                                                       separators=['\n\n', '\n', '。', '!', '；', '.', ' ', ''],
+                                                       keep_separator=False)
+        texts = text_splitter.split_text(body)
+        # 【长度0：body为空，长度1：body只有一个chunk】
+        if len(texts) <= 1:
+            return [section]
+        sub_section = []
+        for index, text in enumerate(texts):
+            sub_section.append({
+                "title": title,
+                "body": text,
+                "file_title": file_title,
+                "parent_title": parent_title,
+                "part": f"{index + 1}"
+            })
+        return sub_section
+
+    def merge_sort_section(self, current_sections: list[dict[str, Any]], min_content_length: int):
+        """
+        贪心累加算法
+        2个局限性：
+            1.撑爆最小阈值
+            2.孤儿小块
+        Args:
+            current_sections:
+            min_content_length:
+
+        Returns:
+
+        """
+        self.log_step("step4", "合并短内容")
+        current_section = current_sections[0]
+        current_section_body = current_section.get('body')
+        final_sections = []  # 最终的箱子
+        for next_section in current_sections[1:]:
+            # 同源
+            same_parent = (current_section['parent_title'] == next_section['parent_title'])
+            if same_parent and len(current_section_body) < min_content_length:
+                # body的合并
+                current_section['body'] = (current_section.get('body').rstrip() + next_section.get('body').lstrip())
+                # 更新current_title
+                current_section['title'] = current_section.get('parent_title')
+
+                current_section['part'] = 0
+
+            else:
+                # 将原来的current_section进行封箱
+                final_sections.append(current_section)
+                # 更新current_section
+                current_section = next_section
+        # 封装最后一个
+        final_sections.append(current_section)
+
+        # 对所有的section的part做处理（为每一个父标题设置对应的part）
+        part_counter = {}
+        for final_section in final_sections:
+            if "part" in final_section.keys():
+                parent_title = final_section.get('parent_title')
+                part_counter[parent_title] = part_counter.get(parent_title,0) + 1
+                new_part = part_counter[parent_title]
+                final_section['part'] = new_part
+                final_section['title'] = final_section['parent_title'] + '-' + new_part
+        return final_sections
+
 
 if __name__ == '__main__':
     document_node = DocumentSplitNode()
     file_path = r"E:\python_project\shopkeeper\knowledge\test\input\test_document_spliter_node.md"
-    with open(file_path,"r",encoding="utf8") as f:
+    with open(file_path, "r", encoding="utf8") as f:
         content = f.read()
     state = {
-        "file_title":"万用表的使用",
-        "md_content":content,
+        "file_title": "万用表的使用",
+        "md_content": content,
 
     }
     print(document_node.process(state).get("sections"))
