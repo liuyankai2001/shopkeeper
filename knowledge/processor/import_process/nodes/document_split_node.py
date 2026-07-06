@@ -10,10 +10,12 @@ from knowledge.processor.import_process.config import get_config
 
 
 
-class DocumentSpliterNode(BaseNode):
+class DocumentSplitNode(BaseNode):
+    name = "document_split_node"
+
     def process(self, state: ImportGraphState) -> T:
         # 1.获取参数
-        md_content,file_title,max_content_length = self._get_inputs(state)
+        md_content,file_title,max_content_length, min_content_length = self._get_inputs(state)
 
         # 2.根据标题切割
         sections,has_title = self._split_by_headings(md_content,file_title)
@@ -29,18 +31,23 @@ class DocumentSpliterNode(BaseNode):
         pass
 
     def _get_inputs(self, state:ImportGraphState):
+        self.log_step("step1","切分文档的参数校验以及获取")
         config = get_config()
         # 1.获取md_content
         md_content = state.get("md_content")
 
         # 2.统一换行符
         if md_content:
-            md_content.replace("\r\n","\n").replace("\r","\n")
+            md_content = md_content.replace("\r\n","\n").replace("\r","\n")
 
         # 3.获取文件标题
         file_title = state.get("file_title")
 
-        return md_content,file_title,config.max_content_length
+        # 4.校验最大最小值
+        if config.max_content_length <= 0 or config.min_content_length <=0 or config.max_content_length <= config.min_content_length:
+            raise ValidationError(f"切片长度参数校验失败")
+
+        return md_content,file_title,config.max_content_length,config.min_content_length
 
     def _split_by_headings(self, md_content:str, file_title:str) -> tuple[list[dict],bool]:
         """
@@ -120,7 +127,7 @@ class DocumentSpliterNode(BaseNode):
         return sections,has_title
 
 if __name__ == '__main__':
-    document_node = DocumentSpliterNode()
+    document_node = DocumentSplitNode()
     file_path = r"E:\python_project\shopkeeper\knowledge\test\input\test_document_spliter_node.md"
     with open(file_path,"r",encoding="utf8") as f:
         content = f.read()
