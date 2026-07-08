@@ -11,6 +11,8 @@ from knowledge.processor.import_process.config import get_config
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
+from knowledge.utils.markdown_utils import MarkdownTableLinearizer
+
 
 class DocumentSplitNode(BaseNode):
     name = "document_split_node"
@@ -23,15 +25,13 @@ class DocumentSplitNode(BaseNode):
         sections, has_title = self._split_by_headings(md_content, file_title)
         # return {"sections":sections,"has_title":has_title}
         # 3.处理(切分和合并)
-        # 3.1 如果section过长 继续进行二次切割
         final_chunks = self.split_and_merge(sections, max_content_length, min_content_length)
-        # 3.2 section内容过短，看能不能合并，如果能合，就合并。如果不能合并，就不合并
 
         # 3. 组装
-
+        chunks = self._assemble_chunk(final_chunks)
         # 4，更新state
-
-        pass
+        state['chunks'] = chunks
+        return state
 
     def _get_inputs(self, state: ImportGraphState):
         self.log_step("step1", "切分文档的参数校验以及获取")
@@ -161,27 +161,31 @@ class DocumentSplitNode(BaseNode):
         file_title = section.get("file_title")  # 不可能为空
         parent_title = section.get("parent_title")  # 不可能为空
 
-        # 2.对标题做一个校验
+        # 2.判断表格
+        if "<table>" in body:
+            body = MarkdownTableLinearizer.process(body)
+
+        # 3.对标题做一个校验
         TITLE_MAX_LENGTH = 50
         if len(title) > TITLE_MAX_LENGTH:
             self.logger.warning(f"标题长度超过限制，已截断：{title}")
             title = title[:TITLE_MAX_LENGTH]
 
-        # 3.拼接title前缀
+        # 4.拼接title前缀
         title_prefix = f"{title}\n\n"
 
-        # 4.计算总长度{len(title_prefix)+len(body)}
+        # 5.计算总长度{len(title_prefix)+len(body)}
         total_length = len(title_prefix) + len(body)
 
-        # 5.判断
+        # 6.判断
         if total_length <= max_content_length:
             return [section]
 
-        # 6.计算body可用长度
+        # 7.计算body可用长度
         body_length = max_content_length - len(title_prefix)
         if body_length <= 0:
             return [section]
-        # 7.切分：
+        # 8.切分：
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=body_length,
                                                        chunk_overlap=0,
                                                        separators=['\n\n', '\n', '。', '!', '；', '.', ' ', ''],
@@ -215,13 +219,14 @@ class DocumentSplitNode(BaseNode):
 
         """
         self.log_step("step4", "合并短内容")
+        # 1.定义变量
         current_section = current_sections[0]
-        current_section_body = current_section.get('body')
+        # current_section_body = current_section.get('body')
         final_sections = []  # 最终的箱子
         for next_section in current_sections[1:]:
             # 同源
             same_parent = (current_section['parent_title'] == next_section['parent_title'])
-            if same_parent and len(current_section_body) < min_content_length:
+            if same_parent and len(current_section.get('body')) < min_content_length:
                 # body的合并
                 current_section['body'] = (current_section.get('body').rstrip() + next_section.get('body').lstrip())
                 # 更新current_title
@@ -245,11 +250,43 @@ class DocumentSplitNode(BaseNode):
                 part_counter[parent_title] = part_counter.get(parent_title,0) + 1
                 new_part = part_counter[parent_title]
                 final_section['part'] = new_part
-                final_section['title'] = final_section['parent_title'] + '-' + new_part
+                # final_section['title'] = final_section['parent_title'] + '-' + new_part
+                final_section['title'] = final_section['title'] + '-' + new_part
         return final_sections
+
+    def _assemble_chunk(self, final_chunks:list[dict[str,Any]]) -> list[dict[str,Any]]:
+        """
+        最终组合chunk
+        Args:
+            final_chunks:
+
+        Returns:
+
+        """
+        chunks = []
+        for chunk in final_chunks:
+            # 1.获取content信息
+            title = chunk.get("title")
+            file_title = chunk.get("file_title")
+            parent_title = chunk.get("parent_title")
+            body = chunk.get("body")
+            content = f"{title}\n\n{body}"
+
+            assemble_chunk = {
+                "title":title,
+                "file_title":file_title,
+                "parent_title":parent_title,
+                "content":content,
+            }
+            # 2.判断part是否存在
+            if "part" in chunk.keys():
+                assemble_chunk['part'] = chunk.get("part")
+            chunks.append(assemble_chunk)
+        return chunks
 
 
 if __name__ == '__main__':
+    setup_logging()
     document_node = DocumentSplitNode()
     file_path = r"E:\python_project\shopkeeper\knowledge\test\input\test_document_spliter_node.md"
     with open(file_path, "r", encoding="utf8") as f:
