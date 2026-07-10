@@ -3,3 +3,4 @@
 /knowledge/test/*
 !/knowledge/test/.gitkeep
 __pycache__
+/models

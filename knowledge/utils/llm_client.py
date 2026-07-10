@@ -38,7 +38,7 @@ def get_llm_client(model_name:str=None,temperature:float=0,response_format:bool=
         return client
     except Exception as e:
         logger.error(f"llm客户端创建失败，原因：{e}")
-        raise e
+        return None
 
 
 if __name__ == '__main__':
